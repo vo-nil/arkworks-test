@@ -154,7 +154,9 @@ fn main() -> Result<()> {
     let sg1 = TestData::<ark_bn254::g1::Config>::from(&sample_g1)?;
     let sg2 = TestData::<ark_bn254::g2::Config>::from(&sample_g2)?;
 
+    println!("Running test case g1");
     run_test_case(&sg1)?;
+    println!("Running test case g2");
     run_test_case(&sg2)?;
 
 //    println!("{sg1:?}");
