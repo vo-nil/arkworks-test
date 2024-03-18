@@ -1,6 +1,8 @@
-use ark_ec::{pairing::{self, Pairing, PairingOutput}, Group, mnt6::G1Projective, CurveGroup, CurveConfig};
+use ark_ec::{
+    pairing::{self, Pairing, PairingOutput}, 
+    Group, CurveGroup, CurveConfig, bn::BnConfig};
 use ark_ec::short_weierstrass::{SWCurveConfig, Projective};
-use ark_ff::{MontFp, Zero, BigInt, CubicExtField, QuadExtField, BigInteger320, utils, Field, QuadExtConfig};
+use ark_ff::{MontFp, Zero, BigInt, CubicExtField, QuadExtField, BigInteger320, utils, Field, QuadExtConfig, Fp2Config, Fp12Config};
 
 use serde::{Deserialize, ser::StdError};
 use std::{fs, env};
@@ -10,20 +12,50 @@ use core::str::FromStr;
 
 use anyhow::{anyhow, Result};
 
+
+use ark_bls12_377::{
+    Fq12,
+    G1Projective as G1,
+    G2Projective as G2,
+
+    Bls12_377 as TestingCurve
+};
+
 /*
-use ark_mnt6_298::{
-    fq::Fq, fq3::Fq3, fr::Fr, Fq6, G1Projective as G1, G2Projective as G2, MNT6_298,
-    G1Affine as G1a,
-    G2Affine as G2a,
+use ark_bls12_381::{
+    Fq12,
+    G1Projective as G1, 
+    G2Projective as G2,
+
+    Bls12_381 as TestingCurve
 };
 */
 
-use ark_bn254::{
-    fq::Fq, fq2::Fq2, fr::Fr, Fq6, Fq12,
-    G1Projective as G1, G2Projective as G2, Bn254,
+/*
+use ark_mnt6_298::{
+    fq::Fq, fq3::Fq3, fr::Fr, 
+    Fq6, 
+
+    G1Projective as G1,
+    G2Projective as G2,
     G1Affine as G1a,
     G2Affine as G2a,
+
+    MNT6_298 as TestingCurve
 };
+*/
+/*
+use ark_bn254::{
+    fq::Fq, fq2::Fq2, fr::Fr, Fq6, Fq12,
+    G1Projective as G1, G2Projective as G2,
+    G1Affine as G1a,
+    G2Affine as G2a,
+    Bn254 as TestingCurve,
+};
+*/
+
+
+
 
 /*
 enum curve_operation_test_points : std::size_t {
@@ -47,12 +79,25 @@ struct ProjectivePointG1(Vec<String>);
 struct ProjectivePointG2(Vec<(String,String)>);
 
 #[derive(Deserialize, Debug)]
-struct TestSample<PP> {
-    pub constants: Vec<u64>,
-    pub point_coordinates: Vec<PP>,
+struct GTElement (
+        ((String,String),(String,String),(String,String)),
+        ((String,String),(String,String),(String,String)),
+);
+
+#[derive(Deserialize, Debug)]
+struct TestSample {
+    #[serde(rename="Fr")]
+    pub fr:Vec<String>,
+    #[serde(rename="G1")]
+    pub g1:Vec<ProjectivePointG1>,
+    #[serde(rename="G2")]
+    pub g2:Vec<ProjectivePointG2>,
+    #[serde(rename="GT")]
+    pub gt:Vec<GTElement>
 }
 
-fn g1_from_sample(x: &ProjectivePointG1) -> Result<Projective<ark_bn254::g1::Config>>
+type G1Proj = G1;
+fn g1_from_sample(x: &ProjectivePointG1) -> Result<G1Proj>
 {
     Ok( Projective {
         x: x.0[0].parse().map_err(|_| anyhow!("failed to parse x"))?,
@@ -61,7 +106,8 @@ fn g1_from_sample(x: &ProjectivePointG1) -> Result<Projective<ark_bn254::g1::Con
     })
 }
 
-fn g2_from_sample(x: &ProjectivePointG2) -> Result<Projective<ark_bn254::g2::Config>>
+type G2Proj = G2;
+fn g2_from_sample(x: &ProjectivePointG2) -> Result<G2Proj>
 {
     Ok( Projective {
         x: QuadExtField {
@@ -79,76 +125,193 @@ fn g2_from_sample(x: &ProjectivePointG2) -> Result<Projective<ark_bn254::g2::Con
     })
 }
 
+type GTtype = Fq12;
+fn gt_from_sample(x: &GTElement) -> Result<GTtype> 
+{
+    Ok(QuadExtField{
+        c0: CubicExtField {
+            c0: QuadExtField {
+                c0: x.0.0.0.parse().map_err(|_| anyhow!("failed to parse c0c0c0"))?,
+                c1: x.0.0.1.parse().map_err(|_| anyhow!("failed to parse c0c0c1"))?,
+            },
+            c1: QuadExtField {
+                c0: x.0.1.0.parse().map_err(|_| anyhow!("failed to parse c0c1c0"))?,
+                c1: x.0.1.1.parse().map_err(|_| anyhow!("failed to parse c0c1c1"))?,
+            },
+            c2: QuadExtField {
+                c0: x.0.2.0.parse().map_err(|_| anyhow!("failed to parse c0c2c0"))?,
+                c1: x.0.2.1.parse().map_err(|_| anyhow!("failed to parse c0c2c1"))?,
+            },
+        },
+        c1: CubicExtField {
+            c0: QuadExtField {
+                c0: x.1.0.0.parse().map_err(|_| anyhow!("failed to parse c1c0c0"))?,
+                c1: x.1.0.1.parse().map_err(|_| anyhow!("failed to parse c1c0c1"))?,
+            },
+            c1: QuadExtField {
+                c0: x.1.1.0.parse().map_err(|_| anyhow!("failed to parse c1c1c0"))?,
+                c1: x.1.1.1.parse().map_err(|_| anyhow!("failed to parse c1c1c1"))?,
+            },
+            c2: QuadExtField {
+                c0: x.1.2.0.parse().map_err(|_| anyhow!("failed to parse c1c2c0"))?,
+                c1: x.1.2.1.parse().map_err(|_| anyhow!("failed to parse c1c2c1"))?,
+            },
+         }
+    })
+}
 
 #[derive(Debug)]
-struct TestData<P:SWCurveConfig> {
+struct FrSet<P: Pairing> {
+    pub vkx: P::ScalarField,
+    pub vky: P::ScalarField,
+    pub vkz: P::ScalarField,
+    pub a1: P::ScalarField,
+    pub b1: P::ScalarField,
     pub c1: P::ScalarField,
+    pub a2: P::ScalarField,
+    pub b2: P::ScalarField,
     pub c2: P::ScalarField,
-    pub p1: Projective<P>,
-    pub p2: Projective<P>,
-    pub p1_plus_p2: Projective<P>,
-    pub p1_minus_p2: Projective<P>,
-    pub p1_mul_c1: Projective<P>,
-    pub p2_mul_c1_plus_p2_mul_c2: Projective<P>,
-    pub p1_dbl: Projective<P>,
 }
 
-impl TestData<ark_bn254::g1::Config> {
-    fn from(sample: &TestSample<ProjectivePointG1>) -> Result<Self> {
-        Ok(TestData {
-            c1: self::Fr::from(sample.constants[0]),
-            c2: self::Fr::from(sample.constants[1]),
-            p1 : g1_from_sample(&sample.point_coordinates[0])?,
-            p2 : g1_from_sample(&sample.point_coordinates[1])?,
-            p1_plus_p2        : g1_from_sample(&sample.point_coordinates[2])?,
-            p1_minus_p2       : g1_from_sample(&sample.point_coordinates[3])?,
-            p1_mul_c1                : g1_from_sample(&sample.point_coordinates[4])?,
-            p2_mul_c1_plus_p2_mul_c2 : g1_from_sample(&sample.point_coordinates[5])?,
-            p1_dbl                   : g1_from_sample(&sample.point_coordinates[6])?,
+#[derive(Debug)]
+struct G1Set<P: Pairing> {
+    pub a1:  P::G1,
+    pub c1:  P::G1,
+    pub a2:  P::G1,
+    pub c2:  P::G1,
+    pub vkx: P::G1,
+}
+
+#[derive(Debug)]
+struct G2Set<P: Pairing> {
+    pub b1:  P::G2,
+    pub b2:  P::G2,
+    pub vky: P::G2,
+    pub vkz: P::G2,
+}
+
+#[derive(Debug)]
+struct GTSet<P: Pairing> {
+    pub a1xb1:        P::TargetField,
+    pub a2xb2:        P::TargetField,
+    pub a1xb1_red:    P::TargetField,
+    pub a2xb2_red:    P::TargetField,
+    pub a1xb1_a2xb2:  P::TargetField,
+    pub vkxa1xb1:     P::TargetField,
+    pub ml_a1b1:      P::TargetField,
+    pub ml_a2b2:      P::TargetField,
+    pub dml_a1b1xa2b2:P::TargetField,
+}
+
+struct TestData<P:Pairing> {
+    pub fr: FrSet<P>,
+    pub g1: G1Set<P>,
+    pub g2: G2Set<P>,
+    pub gt: GTSet<P>,
+}
+
+impl TestData<TestingCurve> {
+    fn from(sample: &TestSample) -> Result<Self> {
+        Ok(Self{
+            fr : FrSet {
+                vkx : sample.fr[0].parse().map_err(|_| anyhow!("Failed to parse vkx"))?,
+                vky : sample.fr[1].parse().map_err(|_| anyhow!("Failed to parse vky"))?,
+                vkz : sample.fr[2].parse().map_err(|_| anyhow!("Failed to parse vkz"))?,
+                a1  : sample.fr[3].parse().map_err(|_| anyhow!("Failed to parse a1 "))?,
+                b1  : sample.fr[4].parse().map_err(|_| anyhow!("Failed to parse b1 "))?,
+                c1  : sample.fr[5].parse().map_err(|_| anyhow!("Failed to parse c1 "))?,
+                a2  : sample.fr[6].parse().map_err(|_| anyhow!("Failed to parse a2 "))?,
+                b2  : sample.fr[7].parse().map_err(|_| anyhow!("Failed to parse b2 "))?,
+                c2  : sample.fr[8].parse().map_err(|_| anyhow!("Failed to parse c2 "))?,
+            },
+            g1 : G1Set {
+                a1:  g1_from_sample(&sample.g1[0])?,
+                c1:  g1_from_sample(&sample.g1[1])?,
+                a2:  g1_from_sample(&sample.g1[2])?,
+                c2:  g1_from_sample(&sample.g1[3])?,
+                vkx: g1_from_sample(&sample.g1[4])?,
+            },
+            g2 : G2Set {
+                b1:  g2_from_sample(&sample.g2[0])?,
+                b2:  g2_from_sample(&sample.g2[1])?,
+                vky: g2_from_sample(&sample.g2[2])?,
+                vkz: g2_from_sample(&sample.g2[3])?,
+            },
+            gt : GTSet {
+                a1xb1:         gt_from_sample(&sample.gt[0])?,
+                a2xb2:         gt_from_sample(&sample.gt[0])?,
+                a1xb1_red:     gt_from_sample(&sample.gt[0])?,
+                a2xb2_red:     gt_from_sample(&sample.gt[0])?,
+                a1xb1_a2xb2:   gt_from_sample(&sample.gt[0])?,
+                vkxa1xb1:      gt_from_sample(&sample.gt[0])?,
+                ml_a1b1:       gt_from_sample(&sample.gt[0])?,
+                ml_a2b2:       gt_from_sample(&sample.gt[0])?,
+                dml_a1b1xa2b2: gt_from_sample(&sample.gt[0])?,
+            }
         })
     }
 }
 
-impl TestData<ark_bn254::g2::Config> {
-    fn from(sample: &TestSample<ProjectivePointG2>) -> Result<Self> {
-        Ok(TestData {
-            c1: self::Fr::from(sample.constants[0]),
-            c2: self::Fr::from(sample.constants[1]),
-            p1 : g2_from_sample(&sample.point_coordinates[0])?,
-            p2 : g2_from_sample(&sample.point_coordinates[1])?,
-            p1_plus_p2        : g2_from_sample(&sample.point_coordinates[2])?,
-            p1_minus_p2       : g2_from_sample(&sample.point_coordinates[3])?,
-            p1_mul_c1                : g2_from_sample(&sample.point_coordinates[4])?,
-            p2_mul_c1_plus_p2_mul_c2 : g2_from_sample(&sample.point_coordinates[5])?,
-            p1_dbl                   : g2_from_sample(&sample.point_coordinates[6])?,
-        })
-    }
-}
+fn test_dataset(t: &TestData<TestingCurve>) -> Result<()> {
+    /* consistency check */
+    assert!(t.fr.vkz.inverse().is_some());
+    assert_eq!(
+        (t.fr.a1*t.fr.b1-t.fr.vkx*t.fr.vky)*t.fr.vkz.inverse().unwrap(),
+        t.fr.c1);
+    assert_eq!(
+        (t.fr.a2*t.fr.b2-t.fr.vkx*t.fr.vky)*t.fr.vkz.inverse().unwrap(),
+        t.fr.c2);
+
+    /* checking points correspond to scalars */
+    let a1 = G1::generator() * t.fr.a1;
+    let a2 = G1::generator() * t.fr.a2;
+    let b1 = G2::generator() * t.fr.b1;
+    let b2 = G2::generator() * t.fr.b2;
+    let c1 = G1::generator() * t.fr.c1;
+    let c2 = G1::generator() * t.fr.c2;
+    assert_eq!(a1, t.g1.a1);
+    assert_eq!(a2, t.g1.a2);
+    assert_eq!(c1, t.g1.c1);
+    assert_eq!(c2, t.g1.c2);
+    assert_eq!(b1, t.g2.b1);
+    assert_eq!(b2, t.g2.b2);
+    
+    let vkx = G1::generator() * t.fr.vkx;
+    let vky = G2::generator() * t.fr.vky;
+    let vkz = G2::generator() * t.fr.vkz;
+    assert_eq!(vkx, t.g1.vkx);
+    assert_eq!(vky, t.g2.vky);
+    assert_eq!(vkz, t.g2.vkz);
+
+    let a1b1 = TestingCurve::pairing(a1, b1);
+    println!("pairing a1b1");
+//    assert_eq!(a1b1.0, t.gt.a1xb1_red);
+
+    let a2b2 = TestingCurve::pairing(a2, b2);
+    println!("pairing a2b2");
+//    assert_eq!(a2b2.0, t.gt.a2xb2_red);
+
+    println!("pairing e(a1,b1) vs e(vkx,vky) * e(c1,vkz)");
+    let p1 = TestingCurve::pairing(vkx, vky).0 * TestingCurve::pairing(c1, vkz).0;
+    assert_eq!(a1b1.0, p1);
 
 
-fn print_projective<P: SWCurveConfig>(label: &str, p: &Projective<P>) {
-    println!("{}: inf: {}", label, p.is_zero());
-    println!("X: {}", p.x);
-    println!("Y: {}", p.y);
-    println!("Z: {}", p.z);
-}
-
-fn run_test_case<P: SWCurveConfig>(data: &TestData<P>) -> Result<()> {
-
-    assert!( data.p1+data.p2         == data.p1_plus_p2 );
-    assert!( data.p1-data.p2         == data.p1_minus_p2 );
-    assert!( data.p1*data.c1         == data.p1_mul_c1 );
-    assert!( data.p2*data.c1 + data.p2*data.c2 == data.p2_mul_c1_plus_p2_mul_c2 );
-    assert!( data.p1 + data.p1 == data.p1_dbl );
- 
     Ok(())
 }
 
 fn main() -> Result<()> {
-    let sample_g1_str = fs::read_to_string("bn128_g1.json")?;
-    let sample_g2_str = fs::read_to_string("bn128_g2.json")?;
+    let sample_str = fs::read_to_string("bls12_377.json")?;
+    // let sample_str = fs::read_to_string("bls12_381.json")?;
+    //let sample_str = fs::read_to_string("bn254_pairing.json")?;
 
-    let sample_g1 : TestSample::<ProjectivePointG1> = serde_json::from_str(&sample_g1_str)?;
+    let sample : TestSample = serde_json::from_str(&sample_str)?;
+
+    let data: TestData<TestingCurve> = TestData::from(&sample)?;
+
+    test_dataset(&data)?;
+
+
+    /*
     let sample_g2 : TestSample::<ProjectivePointG2> = serde_json::from_str(&sample_g2_str)?;
 
     let sg1 = TestData::<ark_bn254::g1::Config>::from(&sample_g1)?;
@@ -158,7 +321,7 @@ fn main() -> Result<()> {
     run_test_case(&sg1)?;
     println!("Running test case g2");
     run_test_case(&sg2)?;
-
+*/
 //    println!("{sg1:?}");
 //    println!("{sg2:?}");
 

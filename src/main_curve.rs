@@ -1,9 +1,12 @@
-use ark_ec::{pairing::{self, Pairing, PairingOutput}, Group, mnt6::G1Projective, CurveGroup};
+use ark_ec::{pairing::{self, Pairing, PairingOutput}, Group, mnt6::G1Projective, CurveGroup, CurveConfig};
 use ark_ec::short_weierstrass::{SWCurveConfig, Projective};
-use ark_ff::{MontFp, Zero, BigInt, CubicExtField, QuadExtField, BigInteger320, utils};
+use ark_ff::{MontFp, Zero, BigInt, CubicExtField, QuadExtField, BigInteger320, utils, Field, QuadExtConfig};
 
 use serde::{Deserialize, ser::StdError};
 use std::{fs, env};
+
+use core::str::FromStr;
+
 
 use anyhow::{anyhow, Result};
 
@@ -38,21 +41,90 @@ enum curve_operation_test_points : std::size_t {
 */
 
 #[derive(Deserialize, Debug)]
-struct ProjectivePoint(Vec<String>);
+struct ProjectivePointG1(Vec<String>);
 
 #[derive(Deserialize, Debug)]
-struct TestSample {
+struct ProjectivePointG2(Vec<(String,String)>);
+
+#[derive(Deserialize, Debug)]
+struct TestSample<PP> {
     pub constants: Vec<u64>,
-    pub point_coordinates: Vec<ProjectivePoint>,
+    pub point_coordinates: Vec<PP>,
 }
 
-fn from_sample(x: &ProjectivePoint) -> Result<G1> {
-    Ok(G1 {
-        x: x.0[0].parse::<Fq>().map_err(|_| anyhow!("failed to parse x"))?,
-        y: x.0[1].parse::<Fq>().map_err(|_| anyhow!("failed to parse y"))?,
-        z: x.0[2].parse::<Fq>().map_err(|_| anyhow!("failed to parse z"))?,
+fn g1_from_sample(x: &ProjectivePointG1) -> Result<Projective<ark_bn254::g1::Config>>
+{
+    Ok( Projective {
+        x: x.0[0].parse().map_err(|_| anyhow!("failed to parse x"))?,
+        y: x.0[1].parse().map_err(|_| anyhow!("failed to parse y"))?,
+        z: x.0[2].parse().map_err(|_| anyhow!("failed to parse z"))?,
     })
 }
+
+fn g2_from_sample(x: &ProjectivePointG2) -> Result<Projective<ark_bn254::g2::Config>>
+{
+    Ok( Projective {
+        x: QuadExtField {
+            c0: x.0[0].0.parse().map_err(|_| anyhow!("failed to parse x.c0"))?,
+            c1: x.0[0].1.parse().map_err(|_| anyhow!("failed to parse x.c1"))?,
+        },
+        y: QuadExtField {
+            c0: x.0[1].0.parse().map_err(|_| anyhow!("failed to parse y.c0"))?,
+            c1: x.0[1].1.parse().map_err(|_| anyhow!("failed to parse y.c1"))?,
+        },
+        z: QuadExtField {
+            c0: x.0[2].0.parse().map_err(|_| anyhow!("failed to parse z.c0"))?,
+            c1: x.0[2].1.parse().map_err(|_| anyhow!("failed to parse z.c1"))?,
+        },
+    })
+}
+
+
+#[derive(Debug)]
+struct TestData<P:SWCurveConfig> {
+    pub c1: P::ScalarField,
+    pub c2: P::ScalarField,
+    pub p1: Projective<P>,
+    pub p2: Projective<P>,
+    pub p1_plus_p2: Projective<P>,
+    pub p1_minus_p2: Projective<P>,
+    pub p1_mul_c1: Projective<P>,
+    pub p2_mul_c1_plus_p2_mul_c2: Projective<P>,
+    pub p1_dbl: Projective<P>,
+}
+
+impl TestData<ark_bn254::g1::Config> {
+    fn from(sample: &TestSample<ProjectivePointG1>) -> Result<Self> {
+        Ok(TestData {
+            c1: self::Fr::from(sample.constants[0]),
+            c2: self::Fr::from(sample.constants[1]),
+            p1 : g1_from_sample(&sample.point_coordinates[0])?,
+            p2 : g1_from_sample(&sample.point_coordinates[1])?,
+            p1_plus_p2        : g1_from_sample(&sample.point_coordinates[2])?,
+            p1_minus_p2       : g1_from_sample(&sample.point_coordinates[3])?,
+            p1_mul_c1                : g1_from_sample(&sample.point_coordinates[4])?,
+            p2_mul_c1_plus_p2_mul_c2 : g1_from_sample(&sample.point_coordinates[5])?,
+            p1_dbl                   : g1_from_sample(&sample.point_coordinates[6])?,
+        })
+    }
+}
+
+impl TestData<ark_bn254::g2::Config> {
+    fn from(sample: &TestSample<ProjectivePointG2>) -> Result<Self> {
+        Ok(TestData {
+            c1: self::Fr::from(sample.constants[0]),
+            c2: self::Fr::from(sample.constants[1]),
+            p1 : g2_from_sample(&sample.point_coordinates[0])?,
+            p2 : g2_from_sample(&sample.point_coordinates[1])?,
+            p1_plus_p2        : g2_from_sample(&sample.point_coordinates[2])?,
+            p1_minus_p2       : g2_from_sample(&sample.point_coordinates[3])?,
+            p1_mul_c1                : g2_from_sample(&sample.point_coordinates[4])?,
+            p2_mul_c1_plus_p2_mul_c2 : g2_from_sample(&sample.point_coordinates[5])?,
+            p1_dbl                   : g2_from_sample(&sample.point_coordinates[6])?,
+        })
+    }
+}
+
 
 fn print_projective<P: SWCurveConfig>(label: &str, p: &Projective<P>) {
     println!("{}: inf: {}", label, p.is_zero());
@@ -61,9 +133,39 @@ fn print_projective<P: SWCurveConfig>(label: &str, p: &Projective<P>) {
     println!("Z: {}", p.z);
 }
 
+fn run_test_case<P: SWCurveConfig>(data: &TestData<P>) -> Result<()> {
+
+    assert!( data.p1+data.p2         == data.p1_plus_p2 );
+    assert!( data.p1-data.p2         == data.p1_minus_p2 );
+    assert!( data.p1*data.c1         == data.p1_mul_c1 );
+    assert!( data.p2*data.c1 + data.p2*data.c2 == data.p2_mul_c1_plus_p2_mul_c2 );
+    assert!( data.p1 + data.p1 == data.p1_dbl );
+ 
+    Ok(())
+}
+
 fn main() -> Result<()> {
-    let sample_str = fs::read_to_string("bn128_g1.json")?;
-    
+    let sample_g1_str = fs::read_to_string("bn128_g1.json")?;
+    let sample_g2_str = fs::read_to_string("bn128_g2.json")?;
+
+    let sample_g1 : TestSample::<ProjectivePointG1> = serde_json::from_str(&sample_g1_str)?;
+    let sample_g2 : TestSample::<ProjectivePointG2> = serde_json::from_str(&sample_g2_str)?;
+
+    let sg1 = TestData::<ark_bn254::g1::Config>::from(&sample_g1)?;
+    let sg2 = TestData::<ark_bn254::g2::Config>::from(&sample_g2)?;
+
+    println!("Running test case g1");
+    run_test_case(&sg1)?;
+    println!("Running test case g2");
+    run_test_case(&sg2)?;
+
+//    println!("{sg1:?}");
+//    println!("{sg2:?}");
+
+//    run_test_case_g1::<ark_bn254::g1::Config>(&sample_g1)?;
+//    run_test_case_g2::<ark_bn254::g2::Config>(&sample_g2)?;
+
+   /* 
     let sample : TestSample = serde_json::from_str(&sample_str)?;
 
     //println!("{sample:?}");
@@ -71,17 +173,20 @@ fn main() -> Result<()> {
     let c1 = Fr::from(sample.constants[0]);
     let c2 = Fr::from(sample.constants[1]);
 
-    let p1 = from_sample(&sample.point_coordinates[0])?;
-    let p2 = from_sample(&sample.point_coordinates[1])?;
-    let p1_plus_p2        = from_sample(&sample.point_coordinates[2])?;
-    let p1_minus_p2       = from_sample(&sample.point_coordinates[3])?;
-    let p1_mul_c1         = from_sample(&sample.point_coordinates[4])?;
-    let p2_mul_c1_plus_p2_mul_c2 = from_sample(&sample.point_coordinates[5])?;
-    let p1_dbl            = from_sample(&sample.point_coordinates[6])?;
+    let p1 = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[0])?;
+    let p2 = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[1])?;
+    let p1_plus_p2        = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[2])?;
+    let p1_minus_p2       = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[3])?;
+    let p1_mul_c1                = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[4])?;
+    let p2_mul_c1_plus_p2_mul_c2 = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[5])?;
+    let p1_dbl                   = from_sample::<ark_bn254::g1::Config>(&sample.point_coordinates[6])?;
+   */
+    /*
     let p1_mixed_add_p2   = from_sample(&sample.point_coordinates[7])?;
     let p1_to_affine      = from_sample(&sample.point_coordinates[8])?;
     let p2_to_specialmul_c2 = from_sample(&sample.point_coordinates[9])?;
-
+    */
+    /*
     print_projective("p1", &p1);
     print_projective("p2", &p2);
 
@@ -97,7 +202,7 @@ fn main() -> Result<()> {
     assert!( p1*c1 == p1_mul_c1 );
     assert!( p2*c1 + p2*c2 == p2_mul_c1_plus_p2_mul_c2 );
     assert!( p1 + p1 == p1_dbl );
-
+*/
  //   println!("a: {}", ap);
 //    println!("b: {}", bp);
 
